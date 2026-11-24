@@ -39,6 +39,7 @@ BATCH_SIZE = 64
 GAMMA = 0.9
 TAU = 0.005
 MEMORY_SIZE = 3000
+MEMORY_SIZE_ALL_LEAVES = 15000   # train.py --all-leaves: 5 transitions per step -> same number of steps kept
 MAX_STEP = 50
 
 # Stage 1

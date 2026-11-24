@@ -3,6 +3,9 @@
 python src/train.py --run NAME                  reward = R_geom + Rangle + Rbest, seeds 0-4 (settings.SEEDS)
 python src/train.py --run NAME --no-geom        ablation: R_geom not added (only logged); outputs *_wo_rgeom
 python src/train.py --run NAME --seeds 0 1 2    chosen seeds
+python src/train.py --run NAME --all-leaves     each step also stores the other 4 leaves of the chosen primary (same
+                                                record and start, reward and next-state azimuth of that leaf) as
+                                                transitions; replay memory 15000 (MEMORY_SIZE_ALL_LEAVES)
 --run (required): outputs go to runs/NAME/ so that different runs never share model files.
 Each seed is an independent run (seeded python / numpy / torch / action sampling, fresh network and replay memory).
 Outputs per seed: runs/NAME/models/policy_net[_ft][_wo_rgeom]_seed<s>.pth (best of each stage),
@@ -27,7 +30,7 @@ from env import N_ONEHOT, N_SCALAR, N_SLOT, CustomEnv
 from model import DQN_Transformer, ReplayMemory, Transition
 from settings import (ANCHOR_POSITIONS, ANCHORS, BATCH_SIZE, EPISODES, EPS_DECAY, EPS_END, EPS_START, FINETUNE_DROP_PROB,
                       FINETUNE_EPISODES, FINETUNE_EPS_START, FINETUNE_LR, GAMMA, LR, MAX_STEP, MEMORY_SIZE,
-                      SEEDS, TAU, run_dir)
+                      MEMORY_SIZE_ALL_LEAVES, SEEDS, TAU, run_dir)
 
 REWARD_KEYS = ('Rangle', 'Rbest', 'R_geom')
 
@@ -42,7 +45,8 @@ class Trainer:
         self.policy_net, self.target_net = net(), net()
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=LR, amsgrad=True)
-        self.memory = ReplayMemory(MEMORY_SIZE)
+        self.memory_size = MEMORY_SIZE_ALL_LEAVES if env.all_leaves else MEMORY_SIZE
+        self.memory = ReplayMemory(self.memory_size)
         self.steps_done = 0
         self.eps_start = EPS_START
         self.episode_rewards = []
@@ -61,7 +65,7 @@ class Trainer:
         self.steps_done = 0
         self.eps_start = FINETUNE_EPS_START
         self.env.anchor_drop_prob = FINETUNE_DROP_PROB
-        self.memory = ReplayMemory(MEMORY_SIZE)
+        self.memory = ReplayMemory(self.memory_size)
         for g in self.optimizer.param_groups:
             g['lr'] = FINETUNE_LR
 
@@ -130,6 +134,10 @@ class Trainer:
 
                 next_state = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
                 self.memory.push(state, action, next_state, torch.tensor([reward], device=self.device))
+                for a, s, r in info.get('other_leaves', ()):            # --all-leaves: same primary, other leaves
+                    self.memory.push(state, torch.tensor([[a]], device=self.device, dtype=torch.long),
+                                     torch.tensor(s, dtype=torch.float32, device=self.device).unsqueeze(0),
+                                     torch.tensor([r], device=self.device))
                 state = next_state
                 self.optimize()
                 self.soft_update()
@@ -188,7 +196,7 @@ def model_paths(run, tag, seed):
     return tuple(os.path.join(run_dir(run, 'models'), f"policy_net{x}{tag}_seed{seed}.pth") for x in ('', '_ft'))
 
 
-def train_seed(run, seed, use_geom, tag):
+def train_seed(run, seed, use_geom, tag, all_leaves=False):
     """One independent run: seeds python / numpy / torch / action sampling, fresh env, network, replay memory."""
     set_seed(seed)
     stamp = f"train{tag}_seed{seed}_{datetime.now():%Y%m%d_%H%M%S}"
@@ -200,12 +208,12 @@ def train_seed(run, seed, use_geom, tag):
         log_file.write(msg + '\n')
         log_file.flush()
 
-    env = CustomEnv(use_geom=use_geom)
+    env = CustomEnv(use_geom=use_geom, all_leaves=all_leaves)
     env.action_space.seed(seed)
     tr = Trainer(env, log)
     tr.seed = seed
     s1, s2 = model_paths(run, tag, seed)
-    log(f"run={run} seed={seed} device={tr.device}")
+    log(f"run={run} seed={seed} device={tr.device} all_leaves={all_leaves} memory={tr.memory_size}")
 
     if os.path.exists(s1):
         tr.load(s1)
@@ -234,11 +242,13 @@ def main():
     ap.add_argument('--run', required=True, help='run name: outputs in runs/<run>/{models, log}')
     ap.add_argument('--no-geom', action='store_true', help='ablation: R_geom not added to the reward')
     ap.add_argument('--seeds', type=int, nargs='+', default=SEEDS, help=f'training seeds (default {SEEDS})')
+    ap.add_argument('--all-leaves', action='store_true',
+                    help='also train on the other 4 leaves of the chosen primary (same record), memory 15000')
     args = ap.parse_args()
     tag = '_wo_rgeom' if args.no_geom else ''
     plt.ion()
     for seed in args.seeds:
-        train_seed(args.run, seed, not args.no_geom, tag)
+        train_seed(args.run, seed, not args.no_geom, tag, args.all_leaves)
     plt.ioff()
     plt.show()
 

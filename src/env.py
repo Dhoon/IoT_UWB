@@ -6,7 +6,7 @@ import numpy as np
 from gymnasium import spaces
 
 from data_loader import load_locations
-from reward import get_reward
+from reward import get_reward, leaf_estimates
 from settings import ANCHOR_DROP_PROB, ANCHORS, DATA_DIR, LOCATIONS, UINT32
 from utils import calc_azimuth, estimate_position_for_action
 
@@ -27,7 +27,7 @@ POS_SCALE = 10.0
 class CustomEnv(gym.Env):
     """Episode = one location (cycled 1..12); step = choose (primary, leaf), draw a record of that primary."""
 
-    def __init__(self, data_dir=DATA_DIR, locations=LOCATIONS, use_geom=True):
+    def __init__(self, data_dir=DATA_DIR, locations=LOCATIONS, use_geom=True, all_leaves=False):
         super().__init__()
         data = load_locations(data_dir, locations)
         self.locations = [loc for loc in locations if loc in data]
@@ -38,6 +38,7 @@ class CustomEnv(gym.Env):
         if empty:
             raise ValueError(f"no records for (location, primary) {empty} in {data_dir}")
         self.use_geom = use_geom
+        self.all_leaves = all_leaves          # step() also returns the other leaves of the chosen primary (training)
 
         self.action_list = [[p, l] for p in ANCHORS for l in ANCHORS if l != p]
         self.action_space = spaces.Discrete(len(self.action_list))
@@ -74,7 +75,7 @@ class CustomEnv(gym.Env):
         masked['messages'] = messages
         return masked
 
-    def _build_state(self, record, primary):
+    def _build_state(self, record, primary, azimuth):
         messages = record.get('messages', {})
         slots = []
         for a in ANCHORS:
@@ -94,7 +95,7 @@ class CustomEnv(gym.Env):
                 continue
             base = next(v for v in ts if v != 0)
             slots += [EMPTY if v == 0 else ((v - base) % UINT32) / TS_SCALE + 1.0 for v in ts]
-        return np.array(self._scalars(self.prev_azimuth, record.get('distance_m'), primary) + slots, dtype=np.float32)
+        return np.array(self._scalars(azimuth, record.get('distance_m'), primary) + slots, dtype=np.float32)
 
     @staticmethod
     def _scalars(azimuth, dist, primary):
@@ -121,21 +122,37 @@ class CustomEnv(gym.Env):
         est, _ = estimate_position_for_action(self.current_record, self.prev_primary, leaf)
         self.prev_azimuth = calc_azimuth(est[0], est[1]) if est is not None else None
         self.prev_est = tuple(est) if est is not None else None
-        return self._build_state(self.current_record, self.prev_primary), {}
+        return self._build_state(self.current_record, self.prev_primary, self.prev_azimuth), {}
 
     def step(self, action_idx):
+        """info['other_leaves'] (all_leaves=True): [(action_idx, next_state, reward)] of the other 4 leaves of the same
+        primary on the same record and start, as if that leaf had been chosen. They are for training only: the tracking
+        (prev_est, prev_azimuth) follows the chosen action."""
         primary, leaf = self.action_list[action_idx]
 
         self.current_record = self._get_record(primary)
         start = self.prev_est                         # least-squares start of this step (previous estimate)
-        est, fail = estimate_position_for_action(self.current_record, primary, leaf, start)
-        reward, info = get_reward(self.current_record, (primary, leaf), est, fail, start, self.use_geom)
+        estimates = leaf_estimates(self.current_record, primary, start)
+        reward, info = get_reward(self.current_record, (primary, leaf), estimates, self.use_geom)
+        prev_az = self.prev_azimuth
+
+        def next_az(est):                             # failed estimate -> azimuth unchanged
+            return prev_az if est is None else calc_azimuth(est[0], est[1])
+
+        if self.all_leaves:
+            info['other_leaves'] = [
+                (self.action_list.index([primary, l]),
+                 self._build_state(self.current_record, primary, next_az(estimates[l][0])),
+                 get_reward(self.current_record, (primary, l), estimates, self.use_geom)[0])
+                for l in estimates if l != leaf]
+
+        est = estimates[leaf][0]
+        self.prev_azimuth = next_az(est)
         if est is not None:
-            self.prev_azimuth = calc_azimuth(est[0], est[1])
             self.prev_est = tuple(est)
         self.prev_primary = primary
 
-        state = self._build_state(self.current_record, primary)
+        state = self._build_state(self.current_record, primary, self.prev_azimuth)
         info['record'] = self.current_record
         info['est'] = None if est is None else [float(est[0]), float(est[1])]   # the estimate the reward is computed on
         return state, reward, False, False, info

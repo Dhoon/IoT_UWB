@@ -28,22 +28,22 @@ def calc_geom(record, primary, leaf):
     return -min(1.0, (q - th) / (1.0 - th))
 
 
-def best_leaf_error(record, primary, true_pos, start=None):
-    """Smallest azimuth error over all leaves of this primary (inf if none works), same least-squares start."""
-    best = float('inf')
-    for leaf in ANCHORS:
-        if leaf == primary:
-            continue
-        pos, _ = estimate_position_for_action(record, primary, leaf, start)
-        if pos is not None:
-            best = min(best, azimuth_error(pos, true_pos))
-    return best
+def leaf_estimates(record, primary, start=None):
+    """{leaf: (pos, fail)} for every leaf of this primary on this record, same least-squares start."""
+    return {leaf: estimate_position_for_action(record, primary, leaf, start) for leaf in ANCHORS if leaf != primary}
 
 
-def get_reward(record, action, est_pos, fail, start, use_geom=True):
-    """est_pos, fail: the env's estimate of this action (estimate_position_for_action from start = previous estimate);
-    start: that least-squares start, also used for the other leaves in Rbest."""
+def best_leaf_error(record, estimates):
+    """Smallest azimuth error over the leaf estimates of one primary (inf if none works)."""
+    errs = [azimuth_error(pos, record['position']) for pos, _ in estimates.values() if pos is not None]
+    return min(errs, default=float('inf'))
+
+
+def get_reward(record, action, estimates, use_geom=True):
+    """estimates: leaf_estimates(record, primary, start) of the env (start = previous estimate); the action's own
+    estimate is estimates[leaf], the others give Rbest."""
     primary, leaf = action
+    est_pos, fail = estimates[leaf]
     true_pos = record['position']
     R_geom = calc_geom(record, primary, leaf)
     g = R_geom if use_geom else 0.0
@@ -55,7 +55,7 @@ def get_reward(record, action, est_pos, fail, start, use_geom=True):
     if fail == 'primary':
         return out(-1.0, 'primary_fail')
 
-    best = best_leaf_error(record, primary, true_pos, start)
+    best = best_leaf_error(record, estimates)
     Rbest_if_missed = -(1.0 - best / BETA) if best <= BETA else 0.0
 
     if est_pos is None:                                   # leaf fail
