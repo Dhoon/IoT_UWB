@@ -7,7 +7,11 @@ total = R_geom + Rangle + Rbest            (use_geom=False: R_geom only logged, 
            -1 if |q| > 1 (no intersection). 0 if the leaf has no TDoA.
   Rangle : azimuth error e of the estimate: 1 - e / BETA if e <= BETA, else max(-1, -(e - BETA) / BETA)
   Rbest  : -(1 - best / BETA) if the action is not within BETA but the best leaf (same primary) is, else 0
-primary fail -> -1;  leaf fail -> R_geom + Rbest (no other leaf works either: R_geom - 1)
+primary fail -> -1
+leaf fail (no TDoA of the leaf, so no R_geom), best = error of the best leaf of the same primary:
+  best <= BETA       -> Rbest = -(1 - best / BETA)                  (a good leaf was missed)
+  best > BETA        -> max(-1, -(best - BETA) / BETA) = Rangle(best)  (failing is never better than the best leaf)
+  no leaf works      -> -1                                          (the primary itself was a bad choice)
 """
 import numpy as np
 
@@ -58,10 +62,13 @@ def get_reward(record, action, est_pos, fail, start, use_geom=True):
     best = best_leaf_error(record, primary, true_pos, start)
     Rbest_if_missed = -(1.0 - best / BETA) if best <= BETA else 0.0
 
-    if est_pos is None:                                   # leaf fail
+    if est_pos is None:                                   # leaf fail (no TDoA of this leaf -> R_geom = 0)
         if best == float('inf'):
-            return out(g - 1.0, 'leaf_no_best')
-        return out(g + Rbest_if_missed, 'leaf_fail', Rbest=Rbest_if_missed)
+            return out(-1.0, 'leaf_no_best')
+        if best <= BETA:                                  # a leaf within BETA was missed
+            return out(Rbest_if_missed, 'leaf_fail', Rbest=Rbest_if_missed)
+        r = max(-1.0, -(best - BETA) / BETA)              # no leaf within BETA: the Rangle of the best leaf (<= 0)
+        return out(r, 'leaf_fail', Rbest=r)
 
     err = azimuth_error(est_pos, true_pos)
     if err <= BETA:
