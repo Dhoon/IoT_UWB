@@ -1,11 +1,13 @@
 """DQN (Transformer, pairwise head) training, 2 stages: Stage 1 (no anchor drop) -> Stage 2 fine-tuning (anchor drop).
 
-python src/train.py --run NAME                  reward = R_geom + Rangle + Rbest, seeds 0-4 (settings.SEEDS)
+python src/train.py --run NAME                  reward = R_geom + Rangle + Rbest, seeds 0-9 (settings.SEEDS)
 python src/train.py --run NAME --no-geom        ablation: R_geom not added (only logged); outputs *_wo_rgeom
 python src/train.py --run NAME --seeds 0 1 2    chosen seeds
 python src/train.py --run NAME --all-leaves     each step also stores the other 4 leaves of the chosen primary (same
                                                 record and start, reward and next-state azimuth of that leaf) as
                                                 transitions; replay memory 15000 (MEMORY_SIZE_ALL_LEAVES)
+python src/train.py --run NAME --jobs 2         2 seeds at a time in separate processes (1 CPU thread each); per-seed
+                                                results do not depend on --jobs. stdout lines start with s<seed>.
 --run (required): outputs go to runs/NAME/ so that different runs never share model files.
 Each seed is an independent run (seeded python / numpy / torch / action sampling, fresh network and replay memory).
 Outputs per seed: runs/NAME/models/policy_net[_ft][_wo_rgeom]_seed<s>.pth (best of each stage),
@@ -14,8 +16,10 @@ Stage 1 of a seed is skipped if its model file already exists in runs/NAME/model
 """
 import argparse
 import math
+import multiprocessing as mp
 import os
 import random
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 
 import matplotlib
@@ -44,6 +48,7 @@ class Trainer:
                                    env.action_list).to(self.device)
         self.policy_net, self.target_net = net(), net()
         self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.policy_params, self.target_params = list(self.policy_net.parameters()), list(self.target_net.parameters())
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=LR, amsgrad=True)
         self.memory_size = MEMORY_SIZE_ALL_LEAVES if env.all_leaves else MEMORY_SIZE
         self.memory = ReplayMemory(self.memory_size)
@@ -101,10 +106,9 @@ class Trainer:
         self.optimizer.step()
 
     def soft_update(self):
-        t, p = self.target_net.state_dict(), self.policy_net.state_dict()
-        for k in p:
-            t[k] = p[k] * TAU + t[k] * (1 - TAU)
-        self.target_net.load_state_dict(t)
+        """target <- TAU * policy + (1 - TAU) * target, in place on the parameters (buffers are constant)."""
+        with torch.no_grad():
+            torch._foreach_lerp_(self.target_params, self.policy_params, TAU)
 
     # ---------- episodes ----------
     def run(self, n_episodes, stage, save_path, offset=0):
@@ -166,6 +170,8 @@ class Trainer:
         self.log(f"{stage} best mean reward {best:+.2f} (loaded {os.path.basename(save_path)})")
 
     def plot(self):
+        if matplotlib.get_backend().lower() == 'agg':      # server (MPLBACKEND=Agg): nothing to show
+            return
         plt.figure(1)
         plt.clf()
         plt.xlabel('Episode')
@@ -204,7 +210,7 @@ def train_seed(run, seed, use_geom, tag, all_leaves=False):
     log_file = open(os.path.join(log_dir, f"{stamp}.txt"), 'w', encoding='utf-8')
 
     def log(msg):
-        print(msg)
+        print(f"s{seed} {msg}")                         # seed prefix: --jobs processes share stdout
         log_file.write(msg + '\n')
         log_file.flush()
 
@@ -237,6 +243,12 @@ def train_seed(run, seed, use_geom, tag, all_leaves=False):
     env.close()
 
 
+def train_seed_worker(*args):
+    """train_seed in a --jobs process: single torch thread (seeds are still set inside train_seed)."""
+    torch.set_num_threads(1)
+    train_seed(*args)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--run', required=True, help='run name: outputs in runs/<run>/{models, log}')
@@ -244,11 +256,22 @@ def main():
     ap.add_argument('--seeds', type=int, nargs='+', default=SEEDS, help=f'training seeds (default {SEEDS})')
     ap.add_argument('--all-leaves', action='store_true',
                     help='also train on the other 4 leaves of the chosen primary (same record), memory 15000')
+    ap.add_argument('--jobs', type=int, default=1,
+                    help='seeds trained at the same time in separate processes (server: 2 = number of vCPUs)')
     args = ap.parse_args()
     tag = '_wo_rgeom' if args.no_geom else ''
+    jobs = [(args.run, s, not args.no_geom, tag, args.all_leaves) for s in args.seeds]
+    if args.jobs > 1:
+        # one CPU thread per process (least_squares + torch), otherwise the processes compete for the same cores
+        for v in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS'):
+            os.environ[v] = '1'
+        with ProcessPoolExecutor(args.jobs, mp_context=mp.get_context('spawn')) as ex:
+            for f in [ex.submit(train_seed_worker, *j) for j in jobs]:
+                f.result()                                   # re-raise an error of a seed
+        return
     plt.ion()
-    for seed in args.seeds:
-        train_seed(args.run, seed, not args.no_geom, tag, args.all_leaves)
+    for j in jobs:
+        train_seed(*j)
     plt.ioff()
     plt.show()
 

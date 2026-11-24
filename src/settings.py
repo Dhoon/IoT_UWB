@@ -22,7 +22,7 @@ DWT_TIME_UNIT = 1 / (499.2e6 * 128.0)
 UINT32 = 1 << 32
 
 # Multi-seed training: one independent run per seed (train.py / test.py --seeds)
-SEEDS = [0, 1, 2, 3, 4]
+SEEDS = list(range(10))
 
 # Outputs of one run (train.py / test.py / plot_training_curve.py --run NAME): runs/NAME/{models, log, result}
 RUNS_DIR = os.path.join(ROOT, 'runs')
