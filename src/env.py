@@ -12,7 +12,7 @@ from utils import calc_azimuth, estimate_position_for_action
 
 # state = scalars (9) + 6 anchors x 4 slots (24) = 33
 #   scalars: [sin az, cos az, distance_m / POS_SCALE (none -> -1), one-hot primary (6, last)]
-#     az: azimuth of the previous estimate (unknown -> sin = cos = 0); distance_m of the record (root = primary)
+#     az: azimuth of the previous estimate (unknown -> sin = cos = 0); distance_m of the record (DS-TWR distance of the primary)
 #   primary slots: [1, Ra, Ra + Da, Ra + Da + Rb] / TS_SCALE (+ 1 except the first)
 #   leaf slots: t2, t5, t8, t11 relative to the first non-zero, / TS_SCALE + 1   (t5 - t2 ~ Ra, t8 - t5 ~ Da)
 #   empty slot -> -1
@@ -31,9 +31,12 @@ class CustomEnv(gym.Env):
         super().__init__()
         data = load_locations(data_dir, locations)
         self.locations = [loc for loc in locations if loc in data]
-        # records with messages, by (location, root)
-        self.records = {(loc, p): [r for r in data[loc] if r.get('messages') and r.get('root_anchor') == p]
+        # all records, by (location, primary): failed sessions (no messages / no primary report) included -> primary fail
+        self.records = {(loc, p): [r for r in data[loc] if r.get('primary_anchor') == p]
                         for loc in self.locations for p in ANCHORS}
+        empty = [k for k, v in self.records.items() if not v]
+        if empty:
+            raise ValueError(f"no records for (location, primary) {empty} in {data_dir}")
         self.use_geom = use_geom
 
         self.action_list = [[p, l] for p in ANCHORS for l in ANCHORS if l != p]
@@ -43,16 +46,33 @@ class CustomEnv(gym.Env):
         self.anchor_drop_prob = ANCHOR_DROP_PROB
         self.episode_count = 0
         self.location = self.locations[0]
-        self.current_record = self.prev_record = self.prev_est = None
+        self.current_record = self.prev_est = None
         self.prev_azimuth = None
         self.prev_primary = ANCHORS[0]
         self.unavailable_anchors = set()
 
     def _get_record(self, primary):
-        if primary in self.unavailable_anchors:
-            return None
-        pool = self.records[(self.location, primary)]
-        return random.choice(pool) if pool else None
+        """Random record of this primary at the current location, with the episode's anchor drop applied."""
+        return self._mask_dropped(random.choice(self.records[(self.location, primary)]))
+
+    def _mask_dropped(self, record):
+        """Copy of the record with the episode's anchor drop applied.
+        Dropped primary: no session -> no messages at all, no distance = same as a failed session record (primary fail).
+        Dropped leaf: t2, t5, t8 removed, t11 kept -> [0, 0, 0, t11] (slots [-1, -1, -1, t11]), leaf fail (no TDoA)."""
+        if not self.unavailable_anchors:
+            return record
+        masked = dict(record)
+        if record.get('primary_anchor') in self.unavailable_anchors:
+            masked['messages'], masked['distance_m'] = {}, None
+            return masked
+        messages = {}
+        for k, v in record.get('messages', {}).items():
+            if int(k) not in self.unavailable_anchors:
+                messages[k] = v
+            elif len(v) >= 4 and v[3] != 0:          # dropped leaf: keep t11 only
+                messages[k] = [0, 0, 0, v[3]]
+        masked['messages'] = messages
+        return masked
 
     def _build_state(self, record, primary):
         messages = record.get('messages', {})
@@ -74,8 +94,7 @@ class CustomEnv(gym.Env):
                 continue
             base = next(v for v in ts if v != 0)
             slots += [EMPTY if v == 0 else ((v - base) % UINT32) / TS_SCALE + 1.0 for v in ts]
-        dist = record.get('distance_m') if record.get('root_anchor') == primary else None
-        return np.array(self._scalars(self.prev_azimuth, dist, primary) + slots, dtype=np.float32)
+        return np.array(self._scalars(self.prev_azimuth, record.get('distance_m'), primary) + slots, dtype=np.float32)
 
     @staticmethod
     def _scalars(azimuth, dist, primary):
@@ -84,57 +103,41 @@ class CustomEnv(gym.Env):
         return az + d + [1.0 if a == primary else 0.0 for a in ANCHORS]
     def reset(self, seed=None, options=None):
         fixed = (options or {}).get('location')           # test: fixed location
-        while True:
-            if fixed is not None:
-                self.location = fixed
-            else:
-                self.location = self.locations[self.episode_count % len(self.locations)]
-                self.episode_count += 1
+        if fixed is not None:
+            self.location = fixed
+        else:
+            self.location = self.locations[self.episode_count % len(self.locations)]
+            self.episode_count += 1
 
-            self.unavailable_anchors = {a for a in ANCHORS if random.random() < self.anchor_drop_prob}
-            available = [a for a in ANCHORS if a not in self.unavailable_anchors]
-            if not available:
-                self.unavailable_anchors = set()
-                available = list(ANCHORS)
+        self.unavailable_anchors = {a for a in ANCHORS if random.random() < self.anchor_drop_prob}
+        available = [a for a in ANCHORS if a not in self.unavailable_anchors]
+        if not available:
+            self.unavailable_anchors = set()
+            available = list(ANCHORS)
 
-            self.prev_primary = random.choice(available)
-            self.current_record = self._get_record(self.prev_primary)
-            if self.current_record is not None:
-                break
-
+        self.prev_primary = random.choice(available)
+        self.current_record = self._get_record(self.prev_primary)
         leaf = random.choice([a for a in ANCHORS if a != self.prev_primary])
         est, _ = estimate_position_for_action(self.current_record, self.prev_primary, leaf)
         self.prev_azimuth = calc_azimuth(est[0], est[1]) if est is not None else None
         self.prev_est = tuple(est) if est is not None else None
-        self.prev_record = self.current_record
         return self._build_state(self.current_record, self.prev_primary), {}
 
     def step(self, action_idx):
         primary, leaf = self.action_list[action_idx]
 
         self.current_record = self._get_record(primary)
-        if self.current_record is None:               # primary unavailable / no record: all its slots empty
-            if self.prev_record is not None:
-                state = self._build_state(self.prev_record, primary)
-                state[:N_SCALAR] = self._scalars(None, None, primary)   # azimuth, distance unknown
-                i = N_SCALAR + ANCHORS.index(primary) * N_SLOT
-                state[i:i + N_SLOT] = EMPTY
-            else:
-                state = np.full(STATE_DIM, EMPTY, dtype=np.float32)
-                state[:N_SCALAR] = self._scalars(None, None, primary)
-            return state, -1.0, False, False, {}
-
-        est, _ = estimate_position_for_action(self.current_record, primary, leaf, self.prev_est)
+        start = self.prev_est                         # least-squares start of this step (previous estimate)
+        est, fail = estimate_position_for_action(self.current_record, primary, leaf, start)
+        reward, info = get_reward(self.current_record, (primary, leaf), est, fail, start, self.use_geom)
         if est is not None:
             self.prev_azimuth = calc_azimuth(est[0], est[1])
             self.prev_est = tuple(est)
         self.prev_primary = primary
-        self.prev_record = self.current_record
 
         state = self._build_state(self.current_record, primary)
-        reward, info = get_reward(self.current_record, (primary, leaf), self.use_geom)
         info['record'] = self.current_record
-        info['est'] = None if est is None else [float(est[0]), float(est[1])]   # tracking estimate (prev_est start)
+        info['est'] = None if est is None else [float(est[0]), float(est[1])]   # the estimate the reward is computed on
         return state, reward, False, False, info
 
     def get_action_array(self, action_idx):

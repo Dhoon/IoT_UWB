@@ -1,8 +1,8 @@
 """Test of the trained policies (one per training seed) on the test split (<TEST_DIR>/<location>.json, last 20 %).
 
-Per model and location 1..12: one episode, greedy policy (no exploration, same invalid-primary mask as training), no
-anchor drop, steps = number of test records with messages at that location. Each step: the chosen primary draws a test
-record of that root (as in training) and the tracking estimate starts from the previous estimate. The record draws use
+Per model and location 1..12: one episode, greedy policy (no exploration, no action mask), no
+anchor drop, steps = number of test records at that location (failed sessions included). Each step: the chosen primary draws a test
+record of that primary (as in training) and the tracking estimate starts from the previous estimate. The record draws use
 --eval-seed, the same for every model.
 
 python src/test.py                       models/policy_net_ft_seed<s>.pth, s in settings.SEEDS
@@ -25,12 +25,11 @@ import pandas as pd
 import torch
 
 from env import CustomEnv
-from reward import best_leaf_error
 from settings import ANCHORS, ROOT, SEEDS, TEST_DIR
 from train import Trainer, model_paths, set_seed
 from utils import azimuth_error, calc_azimuth
 
-CASES = ('success', 'leaf_fail', 'leaf_no_best', 'primary_fail', 'no_record')
+CASES = ('success', 'leaf_fail', 'leaf_no_best', 'primary_fail')
 
 
 def evaluate(model, use_geom, eval_seed, log):
@@ -49,24 +48,23 @@ def evaluate(model, use_geom, eval_seed, log):
         for t in range(n_steps):
             t0 = time.perf_counter()
             with torch.no_grad():
-                a = tr.mask_invalid(tr.policy_net(state), state).max(1).indices.item()
+                a = tr.policy_net(state).max(1).indices.item()
             latency = (time.perf_counter() - t0) * 1000
             primary, leaf = env.get_action_array(a)
             obs, reward, _, _, info = env.step(a)
-            rec = info.get('record')
-            row = dict(location=loc, step=t, primary=primary, leaf=leaf, case=info.get('case', 'no_record'),
+            rec = info['record']
+            row = dict(location=loc, step=t, primary=primary, leaf=leaf, case=info['case'],
                        reward=reward, Rangle=info.get('Rangle'), Rbest=info.get('Rbest'), R_geom=info.get('R_geom'),
-                       seq=rec['seq'] if rec else None, timestamp=rec['timestamp'] if rec else None, latency_ms=latency)
-            if rec and rec.get('position') is not None:
-                true = rec['position']
-                row.update(true_x=true[0], true_y=true[1], true_az=calc_azimuth(*true[:2]))
-                if info.get('est') is not None:
-                    est = info['est']
-                    row.update(est_x=est[0], est_y=est[1], est_az=calc_azimuth(*est), az_err=azimuth_error(est, true),
-                               pos_err=float(np.hypot(est[0] - true[0], est[1] - true[1])))
-                if row['case'] in ('success', 'leaf_fail', 'leaf_no_best'):
-                    b = best_leaf_error(rec, primary, true)
-                    row['best_leaf_az_err'] = b if np.isfinite(b) else None
+                       seq=rec['seq'], timestamp=rec['timestamp'], latency_ms=latency)
+            true = rec['position']
+            row.update(true_x=true[0], true_y=true[1], true_az=calc_azimuth(*true[:2]))
+            if info.get('est') is not None:
+                est = info['est']
+                row.update(est_x=est[0], est_y=est[1], est_az=calc_azimuth(*est), az_err=azimuth_error(est, true),
+                           pos_err=float(np.hypot(est[0] - true[0], est[1] - true[1])))
+            b = info['best_leaf_err']                     # from the reward (same start as the estimate)
+            if b is not None:
+                row['best_leaf_az_err'] = b if np.isfinite(b) else None
             rows.append(row)
             state = torch.tensor(obs, dtype=torch.float32, device=dev).unsqueeze(0)
     env.close()

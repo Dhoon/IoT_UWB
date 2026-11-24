@@ -48,4 +48,3 @@ FINETUNE_LR = 5e-5
 
 # Reward
 BETA = 5.0              # azimuth error scale (deg)
-UNAVAIL_PENALTY = 10.0  # Q penalty of a primary whose state slots are all empty

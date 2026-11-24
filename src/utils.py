@@ -16,7 +16,7 @@ def azimuth_error(est_pos, true_pos):
     return 360 - err if err > 180 else err
 
 
-def root_distance(messages, primary):
+def primary_distance(messages, primary):
     """DS-TWR distance (m) from the primary message [Ra, Da, Rb, Db, D2b]; None if absent."""
     msg = messages.get(str(primary))
     if not msg or len(msg) < 5 or any(v < 0 for v in msg[:5]):
@@ -44,9 +44,9 @@ def tdoa(messages, primary, leaf):
 
 
 def extract_ranging(record, primary, leaf):
-    """(root_dist, tdoa) in m, or None."""
+    """(primary_dist, tdoa) in m, or None."""
     messages = record.get('messages', {})
-    d = root_distance(messages, primary)
+    d = primary_distance(messages, primary)
     if d is None:
         return None
     t = tdoa(messages, primary, leaf)
@@ -54,23 +54,23 @@ def extract_ranging(record, primary, leaf):
 
 
 def estimate_position_for_action(record, primary, leaf, prev_est=None):
-    """(position, None) or (None, 'primary' | 'leaf'): root circle + one TDoA hyperbola, least squares."""
+    """(position, None) or (None, 'primary' | 'leaf'): primary circle + one TDoA hyperbola, least squares."""
     messages = record.get('messages', {})
-    root_dist = root_distance(messages, primary)
-    if root_dist is None:
+    primary_dist = primary_distance(messages, primary)
+    if primary_dist is None:
         return None, 'primary'
     delta = tdoa(messages, primary, leaf)
     if delta is None or leaf not in ANCHOR_POSITIONS:
         return None, 'leaf'
 
-    root_pos = np.array(ANCHOR_POSITIONS[primary])
+    primary_pos = np.array(ANCHOR_POSITIONS[primary])
     leaf_pos = np.array(ANCHOR_POSITIONS[leaf])
-    d_leaf_root = np.linalg.norm(leaf_pos - root_pos)
+    d_leaf_primary = np.linalg.norm(leaf_pos - primary_pos)
 
     def residuals(p):
-        return [np.linalg.norm(p - root_pos) - root_dist,
-                np.linalg.norm(p - leaf_pos) - d_leaf_root - delta]
+        return [np.linalg.norm(p - primary_pos) - primary_dist,
+                np.linalg.norm(p - leaf_pos) - d_leaf_primary - delta]
 
-    x0 = prev_est if prev_est is not None else root_pos   # cold start: root anchor position
+    x0 = prev_est if prev_est is not None else primary_pos   # cold start: primary anchor position
     result = least_squares(residuals, x0=x0)
     return (result.x, None) if result.success else (None, 'leaf')

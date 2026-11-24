@@ -1,10 +1,10 @@
-"""Q network: Transformer encoder over the 6 anchor tokens + pairwise (root, leaf) dueling head.
+"""Q network: Transformer encoder over the 6 anchor tokens + pairwise (primary, leaf) dueling head.
 
 token_a = W_role(a)(slots_a) + W_pos(anchor xy) + E_role(a)          role(a) = primary if a is the state's primary
           (separate input projections for primary and leaf slots: their values mean different things)
 h       = TransformerEncoder (N_LAYERS layers, FFN, residual, LayerNorm) over the 6 tokens
 g       = [mean_a h_a, MLP(scalars)]
-Q(r, l) = V(g) + A(r, l) - mean A,   A(r, l) = MLP([h_r, h_l, h_r * h_l, g])
+Q(p, l) = V(g) + A(p, l) - mean A,   A(p, l) = MLP([h_p, h_l, h_p * h_l, g])
 """
 import random
 from collections import deque, namedtuple
@@ -23,12 +23,12 @@ DROPOUT = 0.0
 
 class DQN_Transformer(nn.Module):
     def __init__(self, n_scalar, n_onehot, n_slot, anchor_xy, action_list):
-        """anchor_xy: [(x, y)] in anchor order; action_list: [[root, leaf]] with 1-based anchor ids in that order."""
+        """anchor_xy: [(x, y)] in anchor order; action_list: [[primary, leaf]] with 1-based anchor ids in that order."""
         super().__init__()
         self.n_scalar, self.n_onehot, self.n_slot = n_scalar, n_onehot, n_slot
         self.n_anchor = len(anchor_xy)
         self.register_buffer('anchor_xy', torch.tensor(anchor_xy, dtype=torch.float32))
-        self.register_buffer('root_idx', torch.tensor([r - 1 for r, _ in action_list]))
+        self.register_buffer('primary_idx', torch.tensor([p - 1 for p, _ in action_list]))
         self.register_buffer('leaf_idx', torch.tensor([l - 1 for _, l in action_list]))
 
         self.proj_primary = nn.Linear(n_slot, D_MODEL)
@@ -55,9 +55,9 @@ class DQN_Transformer(nn.Module):
         h = self.encoder(tok)                                                     # (B, 6, D)
 
         g = torch.cat([h.mean(1), self.scalar_fc(scalars)], dim=1)               # (B, g_dim)
-        hr, hl = h[:, self.root_idx], h[:, self.leaf_idx]                         # (B, n_actions, D)
-        ga = g.unsqueeze(1).expand(-1, hr.shape[1], -1)
-        adv = self.pair(torch.cat([hr, hl, hr * hl, ga], dim=-1)).squeeze(-1)    # (B, n_actions)
+        hp, hl = h[:, self.primary_idx], h[:, self.leaf_idx]                      # (B, n_actions, D)
+        ga = g.unsqueeze(1).expand(-1, hp.shape[1], -1)
+        adv = self.pair(torch.cat([hp, hl, hp * hl, ga], dim=-1)).squeeze(-1)    # (B, n_actions)
         return self.value(g) + adv - adv.mean(dim=1, keepdim=True)
 
 

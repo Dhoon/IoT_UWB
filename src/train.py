@@ -26,7 +26,7 @@ from env import N_ONEHOT, N_SCALAR, N_SLOT, CustomEnv
 from model import DQN_Transformer, ReplayMemory, Transition
 from settings import (ANCHOR_POSITIONS, ANCHORS, BATCH_SIZE, EPISODES, EPS_DECAY, EPS_END, EPS_START, FINETUNE_DROP_PROB,
                       FINETUNE_EPISODES, FINETUNE_EPS_START, FINETUNE_LR, GAMMA, LR, MAX_STEP, MEMORY_SIZE,
-                      MODEL_DIR, ROOT, SEEDS, TAU, UNAVAIL_PENALTY)
+                      MODEL_DIR, ROOT, SEEDS, TAU)
 
 REWARD_KEYS = ('Rangle', 'Rbest', 'R_geom')
 
@@ -65,23 +65,12 @@ class Trainer:
             g['lr'] = FINETUNE_LR
 
     # ---------- action ----------
-    def mask_invalid(self, q, state):
-        """Penalize primaries whose state slots are all empty."""
-        s = state[0].cpu().numpy()
-        for ai, a in enumerate(ANCHORS):
-            o = N_SCALAR + ai * N_SLOT
-            if all(s[o + k] <= -0.9 for k in range(N_SLOT)):
-                for i, (p, _) in enumerate(self.env.action_list):
-                    if p == a:
-                        q[0][i] -= UNAVAIL_PENALTY
-        return q
-
     def select_action(self, state):
         eps = EPS_END + (self.eps_start - EPS_END) * math.exp(-self.steps_done / EPS_DECAY)
         self.steps_done += 1
         if random.random() > eps:
             with torch.no_grad():
-                return self.mask_invalid(self.policy_net(state), state).max(1).indices.view(1, 1)
+                return self.policy_net(state).max(1).indices.view(1, 1)
         return torch.tensor([[self.env.action_space.sample()]], device=self.device, dtype=torch.long)
 
     # ---------- learning ----------
@@ -131,13 +120,12 @@ class Trainer:
                          f"reward={reward:+.3f}")
                 total += reward
 
-                if 'case' in info:
-                    cases[info['case']] = cases.get(info['case'], 0) + 1
-                    n_all += 1
-                    if info['case'] == 'success':
-                        n_succ += 1
-                        for k in REWARD_KEYS:
-                            sums[k] += info[k]
+                cases[info['case']] = cases.get(info['case'], 0) + 1
+                n_all += 1
+                if info['case'] == 'success':
+                    n_succ += 1
+                    for k in REWARD_KEYS:
+                        sums[k] += info[k]
 
                 next_state = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
                 self.memory.push(state, action, next_state, torch.tensor([reward], device=self.device))
