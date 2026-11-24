@@ -5,11 +5,11 @@ anchor drop, steps = number of test records at that location (failed sessions in
 record of that primary (as in training) and the tracking estimate starts from the previous estimate. The record draws use
 --eval-seed, the same for every model.
 
-python src/test.py                       models/policy_net_ft_seed<s>.pth, s in settings.SEEDS
-python src/test.py --no-geom             models/policy_net_ft_wo_rgeom_seed<s>.pth
-python src/test.py --seeds 0 1 2         chosen training seeds
-python src/test.py --model X.pth         one model file
-Outputs (result/test[_wo_rgeom]_<time>_*.csv, log/test[_wo_rgeom]_<time>.txt):
+python src/test.py --run NAME                  runs/NAME/models/policy_net_ft_seed<s>.pth, s in settings.SEEDS
+python src/test.py --run NAME --no-geom        runs/NAME/models/policy_net_ft_wo_rgeom_seed<s>.pth
+python src/test.py --run NAME --seeds 0 1 2    chosen training seeds
+python src/test.py --run NAME --model X.pth    one model file (outputs still in runs/NAME)
+Outputs (runs/NAME/result/test[_wo_rgeom]_<time>_*.csv, runs/NAME/log/test[_wo_rgeom]_<time>.txt):
   _steps.csv        one row per step (column seed = training seed)
   _summary.csv      per (seed, location) and per seed over all locations (location = all)
   _across_seeds.csv per location and all: mean, std (ddof 1), min, max over the seeds of each _summary column
@@ -24,7 +24,7 @@ import pandas as pd
 import torch
 
 from env import CustomEnv
-from settings import ANCHORS, ROOT, SEEDS, TEST_DIR
+from settings import ANCHORS, SEEDS, TEST_DIR, run_dir
 from train import Trainer, model_paths, set_seed
 from utils import azimuth_error, calc_azimuth
 
@@ -86,18 +86,18 @@ def summarize(g):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument('--run', required=True, help='run name: models from / outputs to runs/<run>/')
     ap.add_argument('--no-geom', action='store_true')
     ap.add_argument('--seeds', type=int, nargs='+', default=SEEDS, help='training seeds whose models are tested')
     ap.add_argument('--model', default=None, help='test this one model file instead (seed column = -1)')
     ap.add_argument('--eval-seed', type=int, default=0, help='seed of the test record draws (same for all models)')
     args = ap.parse_args()
     tag = '_wo_rgeom' if args.no_geom else ''
-    models = [(-1, args.model)] if args.model else [(s, model_paths(tag, s)[1]) for s in args.seeds]
+    models = [(-1, args.model)] if args.model else [(s, model_paths(args.run, tag, s)[1]) for s in args.seeds]
 
     stamp = f"test{tag}_{datetime.now():%Y%m%d_%H%M%S}"
-    for d in ('log', 'result'):
-        os.makedirs(os.path.join(ROOT, d), exist_ok=True)
-    log_file = open(os.path.join(ROOT, 'log', f"{stamp}.txt"), 'w', encoding='utf-8')
+    log_dir, res_dir = run_dir(args.run, 'log'), run_dir(args.run, 'result')
+    log_file = open(os.path.join(log_dir, f"{stamp}.txt"), 'w', encoding='utf-8')
 
     def log(msg):
         print(msg)
@@ -115,7 +115,7 @@ def main():
         log_file.close()
         return
     S = pd.DataFrame(rows)
-    S.to_csv(os.path.join(ROOT, 'result', f"{stamp}_steps.csv"), index=False, float_format='%.4f')
+    S.to_csv(os.path.join(res_dir, f"{stamp}_steps.csv"), index=False, float_format='%.4f')
 
     summ = []
     for seed, gs in S.groupby('seed'):
@@ -123,13 +123,13 @@ def main():
             summ.append(dict(seed=seed, location=str(loc), **summarize(g)))
         summ.append(dict(seed=seed, location='all', **summarize(gs)))
     M = pd.DataFrame(summ)
-    M.to_csv(os.path.join(ROOT, 'result', f"{stamp}_summary.csv"), index=False, float_format='%.4f')
+    M.to_csv(os.path.join(res_dir, f"{stamp}_summary.csv"), index=False, float_format='%.4f')
 
     cols = [c for c in M.columns if c not in ('seed', 'location')]
     A = M.groupby('location', sort=False)[cols].agg(['mean', 'std', 'min', 'max'])
     A.columns = [f"{c}_{s}" for c, s in A.columns]
     A.insert(0, 'n_seeds', M.groupby('location', sort=False).seed.nunique())
-    A.reset_index().to_csv(os.path.join(ROOT, 'result', f"{stamp}_across_seeds.csv"), index=False, float_format='%.4f')
+    A.reset_index().to_csv(os.path.join(res_dir, f"{stamp}_across_seeds.csv"), index=False, float_format='%.4f')
 
     show = ['reward_mean', 'az_err_median', 'az_within_5deg', 'pos_err_median']
     log(M[['seed', 'location'] + show].round(3).to_string(index=False))

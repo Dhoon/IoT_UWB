@@ -1,12 +1,13 @@
 """DQN (Transformer, pairwise head) training, 2 stages: Stage 1 (no anchor drop) -> Stage 2 fine-tuning (anchor drop).
 
-python src/train.py                  reward = R_geom + Rangle + Rbest, seeds 0-4 (settings.SEEDS)
-python src/train.py --no-geom        ablation: R_geom not added (only logged); outputs *_wo_rgeom
-python src/train.py --seeds 0 1 2    chosen seeds
+python src/train.py --run NAME                  reward = R_geom + Rangle + Rbest, seeds 0-4 (settings.SEEDS)
+python src/train.py --run NAME --no-geom        ablation: R_geom not added (only logged); outputs *_wo_rgeom
+python src/train.py --run NAME --seeds 0 1 2    chosen seeds
+--run (required): outputs go to runs/NAME/ so that different runs never share model files.
 Each seed is an independent run (seeded python / numpy / torch / action sampling, fresh network and replay memory).
-Outputs per seed: models/policy_net[_ft][_wo_rgeom]_seed<s>.pth (best of each stage),
-                  log/train[_wo_rgeom]_seed<s>_<time>.txt and _episodes.csv (one row per episode).
-Stage 1 of a seed is skipped if its model file already exists.
+Outputs per seed: runs/NAME/models/policy_net[_ft][_wo_rgeom]_seed<s>.pth (best of each stage),
+                  runs/NAME/log/train[_wo_rgeom]_seed<s>_<time>.txt and _episodes.csv (one row per episode).
+Stage 1 of a seed is skipped if its model file already exists in runs/NAME/models (resume within the same run).
 """
 import argparse
 import math
@@ -26,7 +27,7 @@ from env import N_ONEHOT, N_SCALAR, N_SLOT, CustomEnv
 from model import DQN_Transformer, ReplayMemory, Transition
 from settings import (ANCHOR_POSITIONS, ANCHORS, BATCH_SIZE, EPISODES, EPS_DECAY, EPS_END, EPS_START, FINETUNE_DROP_PROB,
                       FINETUNE_EPISODES, FINETUNE_EPS_START, FINETUNE_LR, GAMMA, LR, MAX_STEP, MEMORY_SIZE,
-                      MODEL_DIR, ROOT, SEEDS, TAU)
+                      SEEDS, TAU, run_dir)
 
 REWARD_KEYS = ('Rangle', 'Rbest', 'R_geom')
 
@@ -182,16 +183,17 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-def model_paths(tag, seed):
-    """(Stage 1, Stage 2) model files of one seed."""
-    return tuple(os.path.join(MODEL_DIR, f"policy_net{x}{tag}_seed{seed}.pth") for x in ('', '_ft'))
+def model_paths(run, tag, seed):
+    """(Stage 1, Stage 2) model files of one seed in runs/<run>/models."""
+    return tuple(os.path.join(run_dir(run, 'models'), f"policy_net{x}{tag}_seed{seed}.pth") for x in ('', '_ft'))
 
 
-def train_seed(seed, use_geom, tag):
+def train_seed(run, seed, use_geom, tag):
     """One independent run: seeds python / numpy / torch / action sampling, fresh env, network, replay memory."""
     set_seed(seed)
     stamp = f"train{tag}_seed{seed}_{datetime.now():%Y%m%d_%H%M%S}"
-    log_file = open(os.path.join(ROOT, 'log', f"{stamp}.txt"), 'w', encoding='utf-8')
+    log_dir = run_dir(run, 'log')
+    log_file = open(os.path.join(log_dir, f"{stamp}.txt"), 'w', encoding='utf-8')
 
     def log(msg):
         print(msg)
@@ -202,8 +204,8 @@ def train_seed(seed, use_geom, tag):
     env.action_space.seed(seed)
     tr = Trainer(env, log)
     tr.seed = seed
-    s1, s2 = model_paths(tag, seed)
-    log(f"seed={seed} device={tr.device}")
+    s1, s2 = model_paths(run, tag, seed)
+    log(f"run={run} seed={seed} device={tr.device}")
 
     if os.path.exists(s1):
         tr.load(s1)
@@ -222,22 +224,21 @@ def train_seed(seed, use_geom, tag):
     tr.run(FINETUNE_EPISODES, 'S2', s2, offset=EPISODES)
     log(f"Stage 2 complete. Best model in {os.path.basename(s2)}")
 
-    pd.DataFrame(tr.history).to_csv(os.path.join(ROOT, 'log', f"{stamp}_episodes.csv"), index=False, float_format='%.4f')
+    pd.DataFrame(tr.history).to_csv(os.path.join(log_dir, f"{stamp}_episodes.csv"), index=False, float_format='%.4f')
     log_file.close()
     env.close()
 
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument('--run', required=True, help='run name: outputs in runs/<run>/{models, log}')
     ap.add_argument('--no-geom', action='store_true', help='ablation: R_geom not added to the reward')
     ap.add_argument('--seeds', type=int, nargs='+', default=SEEDS, help=f'training seeds (default {SEEDS})')
     args = ap.parse_args()
     tag = '_wo_rgeom' if args.no_geom else ''
-    for d in ('log', MODEL_DIR):
-        os.makedirs(os.path.join(ROOT, d), exist_ok=True)
     plt.ion()
     for seed in args.seeds:
-        train_seed(seed, not args.no_geom, tag)
+        train_seed(args.run, seed, not args.no_geom, tag)
     plt.ioff()
     plt.show()
 

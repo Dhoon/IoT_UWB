@@ -23,7 +23,16 @@ UINT32 = 1 << 32
 
 # Multi-seed training: one independent run per seed (train.py / test.py --seeds)
 SEEDS = [0, 1, 2, 3, 4]
-MODEL_DIR = os.path.join(ROOT, 'models')
+
+# Outputs of one run (train.py / test.py / plot_training_curve.py --run NAME): runs/NAME/{models, log, result}
+RUNS_DIR = os.path.join(ROOT, 'runs')
+
+
+def run_dir(run, sub):
+    """runs/<run>/<sub> (sub: 'models' | 'log' | 'result'), created if missing."""
+    d = os.path.join(RUNS_DIR, run, sub)
+    os.makedirs(d, exist_ok=True)
+    return d
 
 # DQN
 BATCH_SIZE = 64
