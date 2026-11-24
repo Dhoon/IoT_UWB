@@ -29,7 +29,7 @@ def calc_geom(record, primary, leaf):
 
 
 def leaf_estimates(record, primary, start=None):
-    """{leaf: (pos, fail)} for every leaf of this primary on this record, same least-squares start."""
+    """{leaf: (pos, fail)} for every leaf of this primary on this record (start: fallback of the solver start)."""
     return {leaf: estimate_position_for_action(record, primary, leaf, start) for leaf in ANCHORS if leaf != primary}
 
 
@@ -40,7 +40,7 @@ def best_leaf_error(record, estimates):
 
 
 def get_reward(record, action, estimates, use_geom=True):
-    """estimates: leaf_estimates(record, primary, start) of the env (start = previous estimate); the action's own
+    """estimates: leaf_estimates(record, primary, start) of the env; the action's own
     estimate is estimates[leaf], the others give Rbest."""
     primary, leaf = action
     est_pos, fail = estimates[leaf]

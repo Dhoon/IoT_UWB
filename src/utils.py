@@ -3,7 +3,7 @@ import math
 import numpy as np
 from scipy.optimize import least_squares
 
-from settings import ANCHOR_POSITIONS, C, DWT_TIME_UNIT, UINT32
+from settings import ANCHOR_POSITIONS, ANCHORS, C, DWT_TIME_UNIT, UINT32
 
 
 def calc_azimuth(x, y):
@@ -53,8 +53,41 @@ def extract_ranging(record, primary, leaf):
     return None if t is None else (d, t)
 
 
+def intersection_start(messages, primary, leaf, primary_dist, delta, prev_est=None):
+    """Least-squares start: one of the two intersections of the primary circle (radius r1 = primary_dist) and the leaf
+    circle (radius r2 = |leaf - primary| + delta), the one that fits the other leaves of the same record best:
+    J(p) = sum_k (|p - a_k| - r_k)^2, r_k = |a_k - primary| + tdoa_k. Uses no ground truth and no previous estimate,
+    so a mirror solution of one step does not carry over to the next.
+    No intersection (|r1 - r2| > b): the two points 0.1 m off the pair line. No other leaf with a TDoA: the candidate
+    nearest to prev_est, or the primary anchor position if there is none."""
+    P, L = np.array(ANCHOR_POSITIONS[primary]), np.array(ANCHOR_POSITIONS[leaf])
+    b = np.linalg.norm(L - P)
+    e = (L - P) / b
+    n = np.array([-e[1], e[0]])
+    r1, r2 = primary_dist, b + delta
+    a = (r1 ** 2 - r2 ** 2 + b ** 2) / (2 * b)           # along the pair line from the primary
+    h2 = r1 ** 2 - a ** 2
+    h = math.sqrt(h2) if h2 > 0 else 0.1
+    cands = [P + a * e + h * n, P + a * e - h * n]
+
+    others = []
+    for k in ANCHORS:
+        if k in (primary, leaf):
+            continue
+        t = tdoa(messages, primary, k)
+        if t is not None:
+            A = np.array(ANCHOR_POSITIONS[k])
+            others.append((A, np.linalg.norm(A - P) + t))
+    if others:
+        return min(cands, key=lambda c: sum((np.linalg.norm(c - A) - r) ** 2 for A, r in others))
+    if prev_est is not None:
+        return min(cands, key=lambda c: np.linalg.norm(c - np.asarray(prev_est)))
+    return P
+
+
 def estimate_position_for_action(record, primary, leaf, prev_est=None):
-    """(position, None) or (None, 'primary' | 'leaf'): primary circle + one TDoA hyperbola, least squares."""
+    """(position, None) or (None, 'primary' | 'leaf'): primary circle + one TDoA hyperbola, least squares from
+    intersection_start (prev_est is only its fallback when no other leaf has a TDoA)."""
     messages = record.get('messages', {})
     primary_dist = primary_distance(messages, primary)
     if primary_dist is None:
@@ -71,6 +104,6 @@ def estimate_position_for_action(record, primary, leaf, prev_est=None):
         return [np.linalg.norm(p - primary_pos) - primary_dist,
                 np.linalg.norm(p - leaf_pos) - d_leaf_primary - delta]
 
-    x0 = prev_est if prev_est is not None else primary_pos   # cold start: primary anchor position
+    x0 = intersection_start(messages, primary, leaf, primary_dist, delta, prev_est)
     result = least_squares(residuals, x0=x0)
     return (result.x, None) if result.success else (None, 'leaf')

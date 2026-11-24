@@ -4,7 +4,7 @@ python src/train.py --run NAME                  reward = R_geom + Rangle + Rbest
 python src/train.py --run NAME --no-geom        ablation: R_geom not added (only logged); outputs *_wo_rgeom
 python src/train.py --run NAME --seeds 0 1 2    chosen seeds
 python src/train.py --run NAME --all-leaves     each step also stores the other 4 leaves of the chosen primary (same
-                                                record and start, reward and next-state azimuth of that leaf) as
+                                                record, reward and next-state azimuth of that leaf) as
                                                 transitions; replay memory 15000 (MEMORY_SIZE_ALL_LEAVES)
 python src/train.py --run NAME --jobs 2         2 seeds at a time in separate processes (1 CPU thread each); per-seed
                                                 results do not depend on --jobs. stdout lines start with s<seed>.

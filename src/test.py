@@ -2,7 +2,7 @@
 
 Per model and location 1..12: one episode, greedy policy (no exploration, no action mask), no
 anchor drop, steps = number of test records at that location (failed sessions included). Each step: the chosen primary draws a test
-record of that primary (as in training) and the tracking estimate starts from the previous estimate. The record draws use
+record of that primary (as in training); the solver starts from utils.intersection_start. The record draws use
 --eval-seed, the same for every model.
 
 python src/test.py --run NAME                  runs/NAME/models/policy_net_ft_seed<s>.pth, s in settings.SEEDS
@@ -61,7 +61,7 @@ def evaluate(model, use_geom, eval_seed, log):
                 est = info['est']
                 row.update(est_x=est[0], est_y=est[1], est_az=calc_azimuth(*est), az_err=azimuth_error(est, true),
                            pos_err=float(np.hypot(est[0] - true[0], est[1] - true[1])))
-            b = info['best_leaf_err']                     # from the reward (same start as the estimate)
+            b = info['best_leaf_err']                     # from the reward (same estimates as the env)
             if b is not None:
                 row['best_leaf_az_err'] = b if np.isfinite(b) else None
             rows.append(row)

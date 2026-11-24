@@ -126,12 +126,12 @@ class CustomEnv(gym.Env):
 
     def step(self, action_idx):
         """info['other_leaves'] (all_leaves=True): [(action_idx, next_state, reward)] of the other 4 leaves of the same
-        primary on the same record and start, as if that leaf had been chosen. They are for training only: the tracking
+        primary on the same record, as if that leaf had been chosen. They are for training only: the tracking
         (prev_est, prev_azimuth) follows the chosen action."""
         primary, leaf = self.action_list[action_idx]
 
         self.current_record = self._get_record(primary)
-        start = self.prev_est                         # least-squares start of this step (previous estimate)
+        start = self.prev_est                         # only a fallback of the solver start (utils.intersection_start)
         estimates = leaf_estimates(self.current_record, primary, start)
         reward, info = get_reward(self.current_record, (primary, leaf), estimates, self.use_geom)
         prev_az = self.prev_azimuth
