@@ -16,7 +16,6 @@ Outputs (result/test[_wo_rgeom]_<time>_*.csv, log/test[_wo_rgeom]_<time>.txt):
 """
 import argparse
 import os
-import random
 import time
 from datetime import datetime
 

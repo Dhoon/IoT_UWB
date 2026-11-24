@@ -1,14 +1,17 @@
 """Reward of an action (primary, leaf) on one record.
 
 total = R_geom + Rangle + Rbest            (use_geom=False: R_geom only logged, not added)
-  R_geom : TDoA geometry quality (primary_dist - d_primary_leaf - tdoa) / d_primary_leaf, clipped to [-1, 1]
+  R_geom : blind-zone penalty of the pair. q = (primary_dist - b - tdoa) / b (b = |leaf - primary|, q ~ cos of the
+           angle between the pair line and the tag), th = 1 - GEOM_EPS / b:
+           0 if |q| <= th (circles intersect with margin > GEOM_EPS), -(|q| - th) / (1 - th) if th < |q| <= 1,
+           -1 if |q| > 1 (no intersection). 0 if the leaf has no TDoA.
   Rangle : azimuth error e of the estimate: 1 - e / BETA if e <= BETA, else max(-1, -(e - BETA) / BETA)
   Rbest  : -(1 - best / BETA) if the action is not within BETA but the best leaf (same primary) is, else 0
 primary fail -> -1;  leaf fail -> R_geom + Rbest (no other leaf works either: R_geom - 1)
 """
 import numpy as np
 
-from settings import ANCHOR_POSITIONS, ANCHORS, BETA
+from settings import ANCHOR_POSITIONS, ANCHORS, BETA, GEOM_EPS
 from utils import azimuth_error, estimate_position_for_action, extract_ranging
 
 
@@ -17,10 +20,12 @@ def calc_geom(record, primary, leaf):
     if ranging is None:
         return 0.0
     primary_dist, tdoa = ranging
-    d_primary_leaf = float(np.linalg.norm(np.subtract(ANCHOR_POSITIONS[leaf], ANCHOR_POSITIONS[primary])))
-    if d_primary_leaf == 0:
+    b = float(np.linalg.norm(np.subtract(ANCHOR_POSITIONS[leaf], ANCHOR_POSITIONS[primary])))
+    q = abs((primary_dist - b - tdoa) / b)
+    th = 1.0 - GEOM_EPS / b
+    if q <= th:
         return 0.0
-    return float(np.clip((primary_dist - d_primary_leaf - tdoa) / d_primary_leaf, -1.0, 1.0))
+    return -min(1.0, (q - th) / (1.0 - th))
 
 
 def best_leaf_error(record, primary, true_pos, start=None):

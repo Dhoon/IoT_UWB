@@ -48,3 +48,4 @@ FINETUNE_LR = 5e-5
 
 # Reward
 BETA = 5.0              # azimuth error scale (deg)
+GEOM_EPS = 0.3          # R_geom blind zone: |q| > 1 - GEOM_EPS / baseline (m) is penalized
