@@ -59,4 +59,4 @@ FINETUNE_LR = 5e-5
 # Reward
 BETA = 5.0              # azimuth error scale (deg)
 GEOM_EPS = 0.3          # R_geom blind zone: |q| > 1 - GEOM_EPS / baseline (m) is penalized
-LEAF_FAIL_NO_BEST = -0.5   # --no-best (Rbest off): reward of a leaf fail (some other leaf of the primary works)
+LEAF_FAIL = -0.5        # leaf fail while some other leaf of the primary works (default, Rbest off; --best: Rbest-based)

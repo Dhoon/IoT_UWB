@@ -1,12 +1,12 @@
 """DQN (Transformer, pairwise head) training, 2 stages: Stage 1 (no anchor drop) -> Stage 2 fine-tuning (anchor drop).
 
-python src/train.py --run NAME                  reward = R_geom + Rangle + Rbest, seeds 0-9 (settings.SEEDS)
+python src/train.py --run NAME                  reward = R_geom + Rangle (leaf fail -0.5), seeds 0-9 (settings.SEEDS)
 python src/train.py --run NAME --no-geom        ablation: R_geom not added (only logged); outputs *_wo_rgeom
 python src/train.py --run NAME --seeds 0 1 2    chosen seeds
 python src/train.py --run NAME --all-leaves     each step also stores the other 4 leaves of the chosen primary (same
                                                 record, reward and next-state azimuth of that leaf) as
                                                 transitions; replay memory 15000 (MEMORY_SIZE_ALL_LEAVES)
-python src/train.py --run NAME --no-best        ablation: Rbest off, leaf fail -0.5 (settings.LEAF_FAIL_NO_BEST)
+python src/train.py --run NAME --best           ablation (paper version): Rbest added, leaf fail from the best leaf
 python src/train.py --run NAME --jobs 2        2 seeds at a time in separate processes (1 CPU thread each); per-seed
                                                 results do not depend on --jobs. stdout lines start with s<seed>.
 --run (required): outputs go to runs/NAME/ so that different runs never share model files.
@@ -203,7 +203,7 @@ def model_paths(run, tag, seed):
     return tuple(os.path.join(run_dir(run, 'models'), f"policy_net{x}{tag}_seed{seed}.pth") for x in ('', '_ft'))
 
 
-def train_seed(run, seed, use_geom, tag, all_leaves=False, use_best=True):
+def train_seed(run, seed, use_geom, tag, all_leaves=False, use_best=False):
     """One independent run: seeds python / numpy / torch / action sampling, fresh env, network, replay memory."""
     set_seed(seed)
     stamp = f"train{tag}_seed{seed}_{datetime.now():%Y%m%d_%H%M%S}"
@@ -257,12 +257,12 @@ def main():
     ap.add_argument('--seeds', type=int, nargs='+', default=SEEDS, help=f'training seeds (default {SEEDS})')
     ap.add_argument('--all-leaves', action='store_true',
                     help='also train on the other 4 leaves of the chosen primary (same record), memory 15000')
-    ap.add_argument('--no-best', action='store_true', help='ablation: Rbest off, leaf fail -0.5')
+    ap.add_argument('--best', action='store_true', help='ablation (paper version): Rbest added to the reward')
     ap.add_argument('--jobs', type=int, default=1,
                     help='seeds trained at the same time in separate processes (server: 2 = number of vCPUs)')
     args = ap.parse_args()
     tag = '_wo_rgeom' if args.no_geom else ''
-    jobs = [(args.run, s, not args.no_geom, tag, args.all_leaves, not args.no_best) for s in args.seeds]
+    jobs = [(args.run, s, not args.no_geom, tag, args.all_leaves, args.best) for s in args.seeds]
     if args.jobs > 1:
         # one CPU thread per process (least_squares + torch), otherwise the processes compete for the same cores
         for v in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS'):

@@ -27,7 +27,7 @@ POS_SCALE = 10.0
 class CustomEnv(gym.Env):
     """Episode = one location (cycled 1..12); step = choose (primary, leaf), draw a record of that primary."""
 
-    def __init__(self, data_dir=DATA_DIR, locations=LOCATIONS, use_geom=True, all_leaves=False, use_best=True):
+    def __init__(self, data_dir=DATA_DIR, locations=LOCATIONS, use_geom=True, all_leaves=False, use_best=False):
         super().__init__()
         data = load_locations(data_dir, locations)
         self.locations = [loc for loc in locations if loc in data]
@@ -38,7 +38,7 @@ class CustomEnv(gym.Env):
         if empty:
             raise ValueError(f"no records for (location, primary) {empty} in {data_dir}")
         self.use_geom = use_geom
-        self.use_best = use_best              # False: Rbest off, leaf fail -0.5 (reward.get_reward)
+        self.use_best = use_best              # True: paper Rbest added (ablation); False: leaf fail -0.5 (reward.get_reward)
         self.all_leaves = all_leaves          # step() also returns the other leaves of the chosen primary (training)
 
         self.action_list = [[p, l] for p in ANCHORS for l in ANCHORS if l != p]

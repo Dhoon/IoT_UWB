@@ -1,24 +1,27 @@
 """Reward of an action (primary, leaf) on one record.
 
-total = R_geom + Rangle + Rbest            (use_geom=False: R_geom only logged, not added)
+total = R_geom + Rangle                    (use_geom=False: R_geom only logged, not added)
   R_geom : blind-zone penalty of the pair. q = (primary_dist - b - tdoa) / b (b = |leaf - primary|, q ~ cos of the
            angle between the pair line and the tag), th = 1 - GEOM_EPS / b:
            0 if |q| <= th (circles intersect with margin > GEOM_EPS), -(|q| - th) / (1 - th) if th < |q| <= 1,
            -1 if |q| > 1 (no intersection). 0 if the leaf has no TDoA.
   Rangle : azimuth error e of the estimate: 1 - e / BETA if e <= BETA, else max(-1, -(e - BETA) / BETA)
-  Rbest  : -(1 - best / BETA) if the action is not within BETA but the best leaf (same primary) is, else 0
 primary fail -> -1
-leaf fail (no TDoA of the leaf, so no R_geom), best = error of the best leaf of the same primary:
-  best <= BETA       -> Rbest = -(1 - best / BETA)                  (a good leaf was missed)
-  best > BETA        -> max(-1, -(best - BETA) / BETA) = Rangle(best)  (failing is never better than the best leaf)
-  no leaf works      -> -1                                          (the primary itself was a bad choice)
-use_best=False (ablation, train.py --no-best): Rbest = 0 always; leaf fail -> LEAF_FAIL_NO_BEST (-0.5) instead of the
-  two best-based values above; no leaf works -> -1 as before. With --all-leaves every leaf of the primary is learned
-  on the same record anyway, and Rbest depends on which leaf happened to work on the drawn record (unknown when acting).
+leaf fail (no TDoA of the leaf, so no R_geom):
+  some other leaf of the primary works -> LEAF_FAIL (-0.5)
+  no leaf works                        -> -1                        (the primary itself was a bad choice)
+
+use_best=True (paper version, ablation: train.py --best) adds Rbest:
+  Rbest  : -(1 - best / BETA) if the action is not within BETA but the best leaf (same primary) is, else 0
+           (best = azimuth error of the best leaf of the same primary on the same record)
+  leaf fail: best <= BETA -> Rbest; best > BETA -> Rangle(best) = max(-1, -(best - BETA) / BETA); no leaf works -> -1
+Rbest is off by default: with --all-leaves every leaf of the primary is learned on the same record anyway, Rbest depends
+on which leaf happened to work on the drawn record (unknown when acting), and C vs C_nobest (10 seeds) showed no
+difference (docs/training_changes_vs_paper.md).
 """
 import numpy as np
 
-from settings import ANCHOR_POSITIONS, ANCHORS, BETA, GEOM_EPS, LEAF_FAIL_NO_BEST
+from settings import ANCHOR_POSITIONS, ANCHORS, BETA, GEOM_EPS, LEAF_FAIL
 from utils import azimuth_error, estimate_position_for_action, extract_ranging
 
 
@@ -46,9 +49,9 @@ def best_leaf_error(record, estimates):
     return min(errs, default=float('inf'))
 
 
-def get_reward(record, action, estimates, use_geom=True, use_best=True):
+def get_reward(record, action, estimates, use_geom=True, use_best=False):
     """estimates: leaf_estimates(record, primary, start) of the env; the action's own
-    estimate is estimates[leaf], the others give Rbest (use_best=False: Rbest off, see the module docstring)."""
+    estimate is estimates[leaf], the others tell whether any leaf works (and give Rbest if use_best)."""
     primary, leaf = action
     est_pos, fail = estimates[leaf]
     true_pos = record['position']
@@ -69,7 +72,7 @@ def get_reward(record, action, estimates, use_geom=True, use_best=True):
         if best == float('inf'):
             return out(-1.0, 'leaf_no_best')
         if not use_best:
-            return out(LEAF_FAIL_NO_BEST, 'leaf_fail')
+            return out(LEAF_FAIL, 'leaf_fail')
         if best <= BETA:                                  # a leaf within BETA was missed
             return out(Rbest_if_missed, 'leaf_fail', Rbest=Rbest_if_missed)
         r = max(-1.0, -(best - BETA) / BETA)              # no leaf within BETA: the Rangle of the best leaf (<= 0)
