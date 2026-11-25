@@ -4,7 +4,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # code_revi
 
 # Data: one file per location, <DATA_DIR>/<location>.json (first 80 % of the sessions of each location)
 DATA_DIR = os.path.join(ROOT, 'data', 'train')
-TEST_DIR = os.path.join(os.path.dirname(DATA_DIR), 'test')   # last 20 % (test.py)
+VAL_DIR = os.path.join(os.path.dirname(DATA_DIR), 'val')     # last 20 %: validation split (test.py); it was used to
+                                                             # choose among training variants, so it is not a test set
 LOCATIONS = list(range(1, 13))
 
 ANCHOR_POSITIONS = {

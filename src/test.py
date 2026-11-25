@@ -1,4 +1,5 @@
-"""Test of the trained policies (one per training seed) on the test split (<TEST_DIR>/<location>.json, last 20 %).
+"""Evaluation of the trained policies (one per training seed) on the validation split (<VAL_DIR>/<location>.json,
+last 20 %; data/val, formerly data/test: it was used to choose among training variants).
 
 Per model and location 1..12: one episode, greedy policy (no exploration, no action mask), no
 anchor drop, steps = number of test records at that location (failed sessions included). Each step: the chosen primary draws a test
@@ -25,7 +26,7 @@ import pandas as pd
 import torch
 
 from env import CustomEnv
-from settings import ANCHORS, SEEDS, TEST_DIR, run_dir
+from settings import ANCHORS, SEEDS, VAL_DIR, run_dir
 from train import Trainer, model_paths, set_seed
 from utils import azimuth_error, calc_azimuth
 
@@ -35,7 +36,7 @@ CASES = ('success', 'leaf_fail', 'leaf_no_best', 'primary_fail')
 def evaluate(model, use_geom, eval_seed, log, use_best=False):
     """Step rows of one model over all test locations."""
     set_seed(eval_seed)
-    env = CustomEnv(data_dir=TEST_DIR, use_geom=use_geom, use_best=use_best)
+    env = CustomEnv(data_dir=VAL_DIR, use_geom=use_geom, use_best=use_best)
     tr = Trainer(env, log)
     tr.load(model)
     tr.policy_net.eval()
@@ -111,7 +112,7 @@ def main():
         if not os.path.exists(model):
             log(f"[SKIP] {model} not found")
             continue
-        log(f"model={os.path.basename(model)} seed={seed} data={TEST_DIR} eval_seed={args.eval_seed}")
+        log(f"model={os.path.basename(model)} seed={seed} data={VAL_DIR} eval_seed={args.eval_seed}")
         rows += [dict(seed=seed, **r) for r in evaluate(model, not args.no_geom, args.eval_seed, log, args.best)]
     if not rows:
         log_file.close()
