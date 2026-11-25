@@ -7,7 +7,8 @@ record of that primary (as in training); the solver starts from utils.intersecti
 
 python src/test.py --run NAME                  runs/NAME/models/policy_net_ft_seed<s>.pth, s in settings.SEEDS
 python src/test.py --run NAME --no-geom        runs/NAME/models/policy_net_ft_wo_rgeom_seed<s>.pth
-python src/test.py --run NAME --seeds 0 1 2    chosen training seeds
+python src/test.py --run NAME --no-best        reward columns as in train.py --no-best (az_err etc. unchanged)
+python src/test.py --run NAME --seeds 0 1 2   chosen training seeds
 python src/test.py --run NAME --model X.pth    one model file (outputs still in runs/NAME)
 Outputs (runs/NAME/result/test[_wo_rgeom]_<time>_*.csv, runs/NAME/log/test[_wo_rgeom]_<time>.txt):
   _steps.csv        one row per step (column seed = training seed)
@@ -31,10 +32,10 @@ from utils import azimuth_error, calc_azimuth
 CASES = ('success', 'leaf_fail', 'leaf_no_best', 'primary_fail')
 
 
-def evaluate(model, use_geom, eval_seed, log):
+def evaluate(model, use_geom, eval_seed, log, use_best=True):
     """Step rows of one model over all test locations."""
     set_seed(eval_seed)
-    env = CustomEnv(data_dir=TEST_DIR, use_geom=use_geom)
+    env = CustomEnv(data_dir=TEST_DIR, use_geom=use_geom, use_best=use_best)
     tr = Trainer(env, log)
     tr.load(model)
     tr.policy_net.eval()
@@ -88,6 +89,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--run', required=True, help='run name: models from / outputs to runs/<run>/')
     ap.add_argument('--no-geom', action='store_true')
+    ap.add_argument('--no-best', action='store_true', help='reward columns without Rbest (leaf fail -0.5)')
     ap.add_argument('--seeds', type=int, nargs='+', default=SEEDS, help='training seeds whose models are tested')
     ap.add_argument('--model', default=None, help='test this one model file instead (seed column = -1)')
     ap.add_argument('--eval-seed', type=int, default=0, help='seed of the test record draws (same for all models)')
@@ -110,7 +112,7 @@ def main():
             log(f"[SKIP] {model} not found")
             continue
         log(f"model={os.path.basename(model)} seed={seed} data={TEST_DIR} eval_seed={args.eval_seed}")
-        rows += [dict(seed=seed, **r) for r in evaluate(model, not args.no_geom, args.eval_seed, log)]
+        rows += [dict(seed=seed, **r) for r in evaluate(model, not args.no_geom, args.eval_seed, log, not args.no_best)]
     if not rows:
         log_file.close()
         return

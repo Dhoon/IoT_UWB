@@ -12,10 +12,13 @@ leaf fail (no TDoA of the leaf, so no R_geom), best = error of the best leaf of 
   best <= BETA       -> Rbest = -(1 - best / BETA)                  (a good leaf was missed)
   best > BETA        -> max(-1, -(best - BETA) / BETA) = Rangle(best)  (failing is never better than the best leaf)
   no leaf works      -> -1                                          (the primary itself was a bad choice)
+use_best=False (ablation, train.py --no-best): Rbest = 0 always; leaf fail -> LEAF_FAIL_NO_BEST (-0.5) instead of the
+  two best-based values above; no leaf works -> -1 as before. With --all-leaves every leaf of the primary is learned
+  on the same record anyway, and Rbest depends on which leaf happened to work on the drawn record (unknown when acting).
 """
 import numpy as np
 
-from settings import ANCHOR_POSITIONS, ANCHORS, BETA, GEOM_EPS
+from settings import ANCHOR_POSITIONS, ANCHORS, BETA, GEOM_EPS, LEAF_FAIL_NO_BEST
 from utils import azimuth_error, estimate_position_for_action, extract_ranging
 
 
@@ -43,9 +46,9 @@ def best_leaf_error(record, estimates):
     return min(errs, default=float('inf'))
 
 
-def get_reward(record, action, estimates, use_geom=True):
+def get_reward(record, action, estimates, use_geom=True, use_best=True):
     """estimates: leaf_estimates(record, primary, start) of the env; the action's own
-    estimate is estimates[leaf], the others give Rbest."""
+    estimate is estimates[leaf], the others give Rbest (use_best=False: Rbest off, see the module docstring)."""
     primary, leaf = action
     est_pos, fail = estimates[leaf]
     true_pos = record['position']
@@ -60,11 +63,13 @@ def get_reward(record, action, estimates, use_geom=True):
         return out(-1.0, 'primary_fail')
 
     best = best_leaf_error(record, estimates)
-    Rbest_if_missed = -(1.0 - best / BETA) if best <= BETA else 0.0
+    Rbest_if_missed = -(1.0 - best / BETA) if best <= BETA and use_best else 0.0
 
     if est_pos is None:                                   # leaf fail (no TDoA of this leaf -> R_geom = 0)
         if best == float('inf'):
             return out(-1.0, 'leaf_no_best')
+        if not use_best:
+            return out(LEAF_FAIL_NO_BEST, 'leaf_fail')
         if best <= BETA:                                  # a leaf within BETA was missed
             return out(Rbest_if_missed, 'leaf_fail', Rbest=Rbest_if_missed)
         r = max(-1.0, -(best - BETA) / BETA)              # no leaf within BETA: the Rangle of the best leaf (<= 0)

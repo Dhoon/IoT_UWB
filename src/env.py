@@ -27,7 +27,7 @@ POS_SCALE = 10.0
 class CustomEnv(gym.Env):
     """Episode = one location (cycled 1..12); step = choose (primary, leaf), draw a record of that primary."""
 
-    def __init__(self, data_dir=DATA_DIR, locations=LOCATIONS, use_geom=True, all_leaves=False):
+    def __init__(self, data_dir=DATA_DIR, locations=LOCATIONS, use_geom=True, all_leaves=False, use_best=True):
         super().__init__()
         data = load_locations(data_dir, locations)
         self.locations = [loc for loc in locations if loc in data]
@@ -38,6 +38,7 @@ class CustomEnv(gym.Env):
         if empty:
             raise ValueError(f"no records for (location, primary) {empty} in {data_dir}")
         self.use_geom = use_geom
+        self.use_best = use_best              # False: Rbest off, leaf fail -0.5 (reward.get_reward)
         self.all_leaves = all_leaves          # step() also returns the other leaves of the chosen primary (training)
 
         self.action_list = [[p, l] for p in ANCHORS for l in ANCHORS if l != p]
@@ -133,7 +134,7 @@ class CustomEnv(gym.Env):
         self.current_record = self._get_record(primary)
         start = self.prev_est                         # only a fallback of the solver start (utils.intersection_start)
         estimates = leaf_estimates(self.current_record, primary, start)
-        reward, info = get_reward(self.current_record, (primary, leaf), estimates, self.use_geom)
+        reward, info = get_reward(self.current_record, (primary, leaf), estimates, self.use_geom, self.use_best)
         prev_az = self.prev_azimuth
 
         def next_az(est):                             # failed estimate -> azimuth unchanged
@@ -143,7 +144,7 @@ class CustomEnv(gym.Env):
             info['other_leaves'] = [
                 (self.action_list.index([primary, l]),
                  self._build_state(self.current_record, primary, next_az(estimates[l][0])),
-                 get_reward(self.current_record, (primary, l), estimates, self.use_geom)[0])
+                 get_reward(self.current_record, (primary, l), estimates, self.use_geom, self.use_best)[0])
                 for l in estimates if l != leaf]
 
         est = estimates[leaf][0]
