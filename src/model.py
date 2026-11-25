@@ -61,6 +61,36 @@ class DQN_Transformer(nn.Module):
         return self.value(g) + adv - adv.mean(dim=1, keepdim=True)
 
 
+class CNNQNetwork(nn.Module):
+    """Baseline T1, Adapted DQLEL (Hajiakhondi-Meybodi et al., IEEE TSP 2022): the paper's CNN (Conv1D 128 k3 x 2,
+    FC 128, 64) on the 33-dim state read as one channel of length 33; linear Q output (no softmax)."""
+
+    def __init__(self, n_in, n_actions):
+        super().__init__()
+        self.conv = nn.Sequential(nn.Conv1d(1, 128, 3, padding=1), nn.ReLU(),
+                                  nn.Conv1d(128, 128, 3, padding=1), nn.ReLU())
+        self.fc = nn.Sequential(nn.Linear(128 * n_in, 128), nn.ReLU(), nn.Linear(128, 64), nn.ReLU(),
+                                nn.Linear(64, n_actions))
+
+    def forward(self, x):
+        return self.fc(self.conv(x.unsqueeze(1)).flatten(1))
+
+
+class MLPNetwork(nn.Module):
+    """Baselines T2 (MLP-DQN: Q values) and T4 (supervised: class logits): plain MLP, no dueling."""
+
+    def __init__(self, n_in, n_out, hidden=(256, 256, 128)):
+        super().__init__()
+        layers, d = [], n_in
+        for h in hidden:
+            layers += [nn.Linear(d, h), nn.ReLU()]
+            d = h
+        self.net = nn.Sequential(*layers, nn.Linear(d, n_out))
+
+    def forward(self, x):
+        return self.net(x)
+
+
 class ReplayMemory:
     def __init__(self, capacity):
         self.memory = deque([], maxlen=capacity)
